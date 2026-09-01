@@ -30,7 +30,7 @@ class MultiCurlDriver implements HttpDriver
         }
 
         $id = (int) spl_object_id($handle);
-        $this->transfers[$id] = ['name' => $name, 'handle' => $handle, 'headers' => []];
+        $this->transfers[$id] = ['name' => $name, 'handle' => $handle, 'headers' => [], 'progress' => ['now' => 0, 'total' => 0]];
 
         $header_lines = [];
         foreach ($headers as $key => $value) {
@@ -43,7 +43,20 @@ class MultiCurlDriver implements HttpDriver
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 30,
+            // No total-time cap: a healthy 60MB media download outlives any
+            // number picked here. A transfer dies only when it stalls —
+            // under 1KB/s for 30 straight seconds.
+            CURLOPT_LOW_SPEED_LIMIT => 1024,
+            CURLOPT_LOW_SPEED_TIME => 30,
+            CURLOPT_NOPROGRESS => false,
+            CURLOPT_XFERINFOFUNCTION => function (CurlHandle $h, int $dl_total, int $dl_now): int {
+                $id = (int) spl_object_id($h);
+                if (isset($this->transfers[$id])) {
+                    $this->transfers[$id]['progress'] = ['now' => $dl_now, 'total' => $dl_total];
+                }
+
+                return 0;
+            },
             CURLOPT_HTTPHEADER => $header_lines,
             CURLOPT_HEADERFUNCTION => function (CurlHandle $h, string $line) use ($id): int {
                 if (str_contains($line, ':')) {
@@ -61,6 +74,16 @@ class MultiCurlDriver implements HttpDriver
 
         $this->multi ??= curl_multi_init();
         curl_multi_add_handle($this->multi, $handle);
+    }
+
+    public function progress(): array
+    {
+        $moving = [];
+        foreach ($this->transfers as $transfer) {
+            $moving[$transfer['name']] = $transfer['progress'];
+        }
+
+        return $moving;
     }
 
     public function harvest(): array

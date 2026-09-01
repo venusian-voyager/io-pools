@@ -15,6 +15,8 @@ final class PendingCall
 
     protected ?Closure $on_fail = null;
 
+    protected ?Closure $on_progress = null;
+
     protected ?HttpResult $result = null;
 
     public function __construct(
@@ -33,6 +35,28 @@ final class PendingCall
         $this->on_fail = Closure::fromCallable($hook);
 
         return $this;
+    }
+
+    /**
+     * Hear the download move: hook(bytes_now, bytes_total). total is 0
+     * until the server declares a length. Runs inside the tick, and only
+     * when the byte count actually changed.
+     */
+    public function onProgress(callable $hook): static
+    {
+        $this->on_progress = Closure::fromCallable($hook);
+
+        return $this;
+    }
+
+    /**
+     * Fire the progress hook. Pool-internal.
+     */
+    public function notifyProgress(int $now, int $total): void
+    {
+        if (! is_null($this->on_progress)) {
+            ($this->on_progress)($now, $total);
+        }
     }
 
     public function settled(): bool

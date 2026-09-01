@@ -18,6 +18,9 @@ class HttpPool implements Tickable
     /** @var array<string, PendingCall> */
     protected array $in_flight = [];
 
+    /** @var array<string, int> Last byte count spoken per in-flight name. */
+    protected array $last_progress = [];
+
     public function __construct(
         protected HttpDriver $driver,
         protected EventSink $sink,
@@ -42,11 +45,20 @@ class HttpPool implements Tickable
         return $call;
     }
 
+    /**
+     * The pending call still flying under a name, or null. The door a
+     * client needs to coalesce identical requests instead of throwing.
+     */
+    public function inFlight(string $name): ?PendingCall
+    {
+        return $this->in_flight[$name] ?? null;
+    }
+
     public function tick(): void
     {
         foreach ($this->driver->harvest() as $result) {
             $call = $this->in_flight[$result->name] ?? null;
-            unset($this->in_flight[$result->name]);
+            unset($this->in_flight[$result->name], $this->last_progress[$result->name]);
 
             $this->sink->push(new Event(
                 family: 'task',
@@ -55,6 +67,23 @@ class HttpPool implements Tickable
             ));
 
             $call?->settle($result);
+        }
+
+        // Progress rides its own lane, 'progress.<name>', so has('<name>')
+        // still means "finished". Spoken only when the byte count moved.
+        foreach ($this->driver->progress() as $name => $moved) {
+            if (($this->last_progress[$name] ?? -1) === $moved['now']) {
+                continue;
+            }
+            $this->last_progress[$name] = $moved['now'];
+
+            $this->sink->push(new Event(
+                family: 'task.progress',
+                name: "progress.{$name}",
+                payload: ['name' => $name, 'bytes_now' => $moved['now'], 'bytes_total' => $moved['total']],
+            ));
+
+            ($this->in_flight[$name] ?? null)?->notifyProgress($moved['now'], $moved['total']);
         }
     }
 }
