@@ -1,6 +1,6 @@
 {
   "name": "venusian-voyager/io-pools",
-  "description": "Non-blocking I/O pools riding a cooperative loop tick.",
+  "description": "The IOPool dock: resource drivers riding a cooperative loop tick, mail drained to the loop's one consumer.",
   "license": "MIT",
   "authors": [
     {
@@ -12,6 +12,9 @@
       "php": "^8.4|^8.5",
       "venusian-voyager/contracts": "^0.8.0",
       "venusian-voyager/nuts-and-bolts": "^0.8.0"
+  },
+  "suggest": {
+      "venusian-voyager/redis": "Required by the redis async resource driver (out-of-process mail over a Redis list)."
   },
   "minimum-stability": "dev",
   "autoload": {
