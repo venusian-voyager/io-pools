@@ -133,7 +133,7 @@ class MultiCurlResourceDriver extends HttpResourceDriver
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_LOW_SPEED_LIMIT => 1024,
-            CURLOPT_LOW_SPEED_TIME => 30,
+            CURLOPT_LOW_SPEED_TIME => 120,
             CURLOPT_NOPROGRESS => false,
             CURLOPT_XFERINFOFUNCTION => function (CurlHandle $h, int $dl_total, int $dl_now): int {
                 $id = (int) spl_object_id($h);
