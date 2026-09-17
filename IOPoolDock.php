@@ -30,9 +30,25 @@ class IOPoolDock implements PoolService
         $this->bag->push($event);
     }
 
+    /**
+     * Tick every resource. A resource that throws does not spare the ones
+     * after it; the first failure is rethrown once all have ticked.
+     */
     public function pump(): void
     {
-        $this->resources->each(fn(IOResourceDriver $resource) => $resource->tick());
+        $failure = null;
+
+        foreach ($this->resources as $resource) {
+            try {
+                $resource->tick();
+            } catch (\Throwable $e) {
+                $failure ??= $e;
+            }
+        }
+
+        if (! is_null($failure)) {
+            throw $failure;
+        }
     }
 
     public function drain(): IOEventBag

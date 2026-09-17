@@ -7,6 +7,7 @@ use CurlMultiHandle;
 use Voyager\IOPools\Presumption;
 use Voyager\IOPools\DTO\HttpResult;
 use Voyager\Contracts\IOPools\PoolPump;
+use Voyager\Contracts\IOPools\QueuedIO;
 use Voyager\Contracts\IOPools\IOPoolsException;
 
 class MultiCurlResourceDriver extends HttpResourceDriver
@@ -99,11 +100,30 @@ class MultiCurlResourceDriver extends HttpResourceDriver
             $presumption = $this->in_flight[$name] ?? null;
             $envelope = $this->envelopes[$name] ?? null;
             unset($this->in_flight[$name], $this->envelopes[$name], $this->last_progress[$name]);
-            $final_result = is_null($envelope) ? $result : $envelope($result);
-            $this->io_pool->push($final_result);
+            $this->io_pool->push($this->outgoing($result, $envelope));
 
             $presumption?->settle($result);
         }
+    }
+
+    /**
+     * The mail to push for a finished call. An envelope that throws or hands
+     * back something that is not mail falls back to the raw result, so the
+     * presumption still settles and the rest of the tick still runs.
+     */
+    protected function outgoing(HttpResult $result, ?callable $envelope): QueuedIO
+    {
+        if (is_null($envelope)) {
+            return $result;
+        }
+
+        try {
+            $out = $envelope($result);
+        } catch (\Throwable) {
+            return $result;
+        }
+
+        return $out instanceof QueuedIO ? $out : $result;
     }
 
     protected function dispatch(string $name, string $url, string $method, array $headers = [], ?array $body = null): void
