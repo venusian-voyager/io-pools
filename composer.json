@@ -10,11 +10,14 @@
   ],
   "require": {
       "php": "^8.4|^8.5",
-      "venusian-voyager/contracts": "^0.8.0",
-      "venusian-voyager/nuts-and-bolts": "^0.8.0"
+      "guzzlehttp/promises": "^2.0",
+      "venusian-voyager/contracts": "^0.9.0",
+      "venusian-voyager/nuts-and-bolts": "^0.9.0"
+
   },
   "suggest": {
-      "venusian-voyager/redis": "Required by the redis async resource driver (out-of-process mail over a Redis list)."
+      "ext-parallel": "Required to use the thread worker-pool driver (ZTS builds only).",
+      "react/promise": "Required to use the react promise engine (^3.0)."
   },
   "minimum-stability": "dev",
   "autoload": {
@@ -27,7 +30,7 @@
   },
   "extra": {
     "branch-alias": {
-        "dev-main": "0.8.x-dev"
+        "dev-main": "0.9.x-dev"
     }
   }
 }

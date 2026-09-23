@@ -1,0 +1,30 @@
+#!/usr/bin/env php
+<?php
+
+// usage: pool-worker <autoload.php> <base_path>
+
+require $argv[1];
+
+use Voyager\Contracts\Console\Kernel;
+use Voyager\Core\VenusianVoyager;
+use Voyager\IOPools\PoolEnvelope;
+use Voyager\IOPools\ProcessPoolFrame;
+
+// stdout belongs to the protocol. Anything a job echoes goes to stderr instead.
+$closure = function (string $chunk) {
+    fwrite(STDERR, $chunk); return '';
+};
+ob_start($closure, 1);
+
+// launch() only builds the container. A gig reaching for app('hash') needs what the console boots.
+VenusianVoyager::launch($argv[2])->make(Kernel::class)->bootstrap();
+
+$buffer = '';
+
+while (! feof(STDIN)) {
+    $buffer .= fread(STDIN, 65536);                 // blocking read: a worker has nothing else to do
+
+    while ($frame = ProcessPoolFrame::take($buffer)) {
+        ProcessPoolFrame::write(STDOUT, PoolEnvelope::run($frame['job']));
+    }
+}
