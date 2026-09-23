@@ -21,9 +21,9 @@ final class Task implements TaskContract
         $this->scheduler->cancel($this->fiber);
     }
 
-    public function then(callable $callable): Promise
+    public function then(callable $callable, ?callable $on_rejected = null): Promise
     {
-        return $this->promise->then($callable);
+        return $this->promise->then($callable, $on_rejected);
     }
 
     public function error(callable $callable): Promise
