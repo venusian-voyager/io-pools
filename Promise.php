@@ -26,9 +26,13 @@ class Promise implements PromiseContract
         $this->engine->chain($this->inner, $this->recordValue(...), $this->recordReason(...));
     }
 
-    public function then(callable $callable): PromiseContract
+    /**
+     * A foreign library that assimilates this promise calls then($resolve, $reject).
+     * Take both, or its reject handler is dropped and the chain never settles.
+     */
+    public function then(callable $callable, ?callable $on_rejected = null): PromiseContract
     {
-        return $this->chain($callable, null);
+        return $this->chain($callable, $on_rejected);
     }
 
     public function error(callable $callable): PromiseContract

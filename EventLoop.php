@@ -114,6 +114,12 @@ class EventLoop implements LoopContract
             // Asked fresh every turn: the last timer may have fired, the last resource may have left.
             if (is_null($this->nextDue()) && ! $this->notebook->hasResources())
             {
+                // a settled foreign promise still has its callbacks queued: that is work, flush it first
+                $this->promise_engine->flush();
+                if ($assertion()) {
+                    return;
+                }
+
                 // only suspended fibers are left and nothing can wake them: cancel them, then look again,
                 // so a wait on one of their tasks sees CancelledException rather than this
                 if (! $this->scheduler->idle())
