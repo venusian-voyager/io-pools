@@ -4,6 +4,7 @@ namespace Voyager\IOPools;
 
 use Voyager\Contracts\IOPools\PoolWorker;
 use Voyager\Contracts\IOPools\ProcessWorker;
+use Voyager\Contracts\IOPools\EventLoopException;
 use Voyager\Contracts\IOPools\Loop as LoopInterface;
 
 class ProcessPool extends Pool
@@ -13,8 +14,13 @@ class ProcessPool extends Pool
         protected array $command,
         int $size = 4,
         ?int $max_jobs = null,
+        private readonly float $hello_timeout_s = 5.0,
     )
     {
+        if ($hello_timeout_s <= 0) {
+            throw new EventLoopException("hello_timeout_s must be above zero; got {$hello_timeout_s}.");
+        }
+
         parent::__construct($loop, $size, $max_jobs);
     }
 
@@ -28,6 +34,6 @@ class ProcessPool extends Pool
 
     protected function spawn(string $name): PoolWorker
     {
-        return new ProcessPoolWorker($name, $this->loop, $this, $this->command);
+        return new ProcessPoolWorker($name, $this->loop, $this, $this->command, $this->hello_timeout_s);
     }
 }

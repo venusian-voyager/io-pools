@@ -50,6 +50,10 @@ class ThreadPool extends Pool
             throw new EventLoopException("sweep_seconds must be above zero; got {$sweep_seconds}.");
         }
 
+        if ($hello_timeout_s <= 0) {
+            throw new EventLoopException("hello_timeout_s must be above zero; got {$hello_timeout_s}.");
+        }
+
         parent::__construct($loop, $size, $max_jobs);
 
         // a thread writing to a bell we've closed must not take the process down (Linux; macOS returns false)

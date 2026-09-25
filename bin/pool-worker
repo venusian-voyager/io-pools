@@ -3,19 +3,19 @@
 
 // usage: pool-worker <autoload.php> <base_path>
 
-require $argv[1];
-
-use Throwable;
 use Voyager\Contracts\Console\Kernel;
 use Voyager\Core\VenusianVoyager;
 use Voyager\IOPools\PoolEnvelope;
 use Voyager\IOPools\ProcessPoolFrame;
 
-// stdout belongs to the protocol. Anything a job echoes goes to stderr instead.
+// stdout belongs to the protocol. Anything else, echoes and displayed errors alike, goes to stderr.
+// First statement, so the autoloader's own warnings are caught too.
 $closure = function (string $chunk) {
     fwrite(STDERR, $chunk); return '';
 };
 ob_start($closure, 1);
+
+require $argv[1];
 
 // launch() only builds the container. A gig reaching for app('hash') needs what the console boots.
 // Bootstrap failures must not hit stdout: HandleExceptions renders to ConsoleOutput (the protocol pipe),
@@ -26,6 +26,9 @@ try {
     fwrite(STDERR, $e->getMessage().PHP_EOL);
     exit(1);
 }
+
+// booted: the parent holds our first gig until it reads this
+ProcessPoolFrame::write(STDOUT, ['hello' => getmypid()]);
 
 $buffer = '';
 
