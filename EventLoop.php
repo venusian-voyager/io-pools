@@ -129,8 +129,14 @@ class EventLoop implements LoopContract
                     return;
                 }
 
-                // only suspended fibers are left and nothing can wake them: cancel them, then look again,
-                // so a wait on one of their tasks sees CancelledException rather than this
+                // only suspended fibers are left: wake the ones whose condition holds, then look again
+                if ($this->scheduler->resume()) {
+                    $this->promise_engine->flush();
+                    continue;
+                }
+
+                // nothing can wake the rest: cancel them, then look again, so a wait on one of their
+                // tasks sees CancelledException rather than this
                 if (! $this->scheduler->idle())
                 {
                     $this->scheduler->cancelAll();

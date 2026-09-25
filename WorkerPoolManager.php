@@ -22,6 +22,7 @@ class WorkerPoolManager extends Manager
             ],
             size: $config['size'] ?? 4,
             max_jobs: $config['max_jobs'] ?? null,
+            hello_timeout_s: $config['hello_timeout_s'] ?? 5.0,
         );
     }
 
@@ -39,6 +40,7 @@ class WorkerPoolManager extends Manager
             size: $config['size'] ?? 4,
             max_jobs: $config['max_jobs'] ?? null,
             sweep_seconds: $config['sweep_seconds'] ?? 0.5,
+            hello_timeout_s: $config['hello_timeout_s'] ?? 5.0,
         );
     }
 

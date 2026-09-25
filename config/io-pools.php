@@ -51,7 +51,8 @@ return [
     | size is how many workers may be busy at once. max_jobs recycles a
     | worker after that many gigs; null never recycles. A null autoload_path
     | is the app's vendor/autoload.php, and a null base_path is the app's
-    | base path. Both drivers boot the framework there.
+    | base path. Both drivers boot the framework there. A worker that hasn't
+    | finished booting within hello_timeout_s is killed and its gig rejected.
     |
     | worker_script and php_args apply to the process driver. A null script
     | uses the packaged bin/pool-worker. sweep_seconds applies to the thread
@@ -67,6 +68,7 @@ return [
         'max_jobs'      => is_null($max = env('POOL_MAX_JOBS', 500)) ? null : (int) $max,
         'autoload_path' => null,
         'base_path'     => null,
+        'hello_timeout_s' => (float) env('POOL_HELLO_TIMEOUT', 5.0),
 
         // process driver
         'worker_script' => null,
