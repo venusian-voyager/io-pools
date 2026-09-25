@@ -55,6 +55,7 @@ class EventLoop implements LoopContract
      */
     public function run(): int
     {
+        $this->status = 0;
         $this->stopping = false;
         $this->running = true;
 
@@ -73,6 +74,9 @@ class EventLoop implements LoopContract
             foreach ($this->on_stop as $hook) {
                 try { $hook(); } catch (Throwable) {}
             }
+
+            // the stop ended this run, not the loop: later until() calls and the next run() start clean
+            $this->stopping = false;
         }
 
         return $this->status;
@@ -108,6 +112,11 @@ class EventLoop implements LoopContract
         while (! $assertion())
         {
             if ($this->stopping) {
+                // outside run() nothing else clears the flag: the stop ends this wait, not the loop
+                if (! $this->running) {
+                    $this->stopping = false;
+                }
+
                 throw new EventLoopException('The loop was stopped while until() was still waiting.');
             }
 
