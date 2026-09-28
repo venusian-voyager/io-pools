@@ -147,10 +147,12 @@ class KqueueWaiterBackend extends WaiterBackendDriver
             return;
         }
 
+        // Asked before the owner leaves: alive() looks for an open stream among the owners.
+        $alive = $this->alive($id);
         unset($this->registrations[$id]['owners'][$owner]);
 
         if ($this->registrations[$id]['owners'] === []) {
-            $this->drop($id);
+            $this->drop($id, $alive);
         }
     }
 
@@ -229,12 +231,12 @@ class KqueueWaiterBackend extends WaiterBackendDriver
         return [$file, EVFILT_VNODE, EV_CLEAR, $notes, $file];
     }
 
-    private function drop(int $id): void
+    private function drop(int $id, ?bool $alive = null): void
     {
         $registration = $this->registrations[$id];
 
         // A closed fd already took its registrations with it: only an open one is deleted.
-        if ($this->alive($id)) {
+        if ($alive ?? $this->alive($id)) {
             $kev = new kevent();
             EV_SET($kev, $registration['ident'], $registration['filter'], EV_DELETE, 0, 0, 0);
             kevent($this->kq, [$kev], 1, $none, 0, null);
