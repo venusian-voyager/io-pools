@@ -1,0 +1,55 @@
+#!/usr/bin/env php
+<?php
+
+// usage: pool-worker <autoload.php> <base_path>
+
+use Voyager\Core\VenusianVoyager;
+use Voyager\Contracts\Console\Kernel;
+use Voyager\IOPools\WorkerPools\GigEnvelope;
+use Voyager\IOPools\WorkerPools\Process\Frame;
+
+// stdout carries frames only. Anything a bootstrapper or a gig prints goes to stderr, which
+// the pool keeps the tail of for its error messages. First statement, so the autoloader's
+// own warnings are caught too.
+ob_start(function (string $chunk): string {
+    fwrite(STDERR, $chunk);
+
+    return '';
+}, 1);
+
+require $argv[1];
+
+// A gig that reaches for an app service needs the app the console boots.
+// An app ships bootstrap/app.php; a bare package is booted from its base path.
+try {
+    $base_path = $argv[2];
+
+    $app = is_file($base_path.'/bootstrap/app.php')
+        ? require $base_path.'/bootstrap/app.php'
+        : VenusianVoyager::setup($base_path)->create();
+
+    $app->make(Kernel::class)->bootstrap();
+} catch (Throwable $e) {
+    fwrite(STDERR, $e::class.': '.$e->getMessage().PHP_EOL);
+    exit(1);
+}
+
+// Booted: the pool holds the first gig until it reads this.
+fwrite(STDOUT, Frame::encode(['hello' => getmypid()]));
+
+$buffer = '';
+
+// Blocking reads: a worker has nothing else to do. The pool closing stdin ends the loop.
+while (! feof(STDIN)) {
+    $chunk = fread(STDIN, 65536);
+
+    if ($chunk === false) {
+        break;
+    }
+
+    $buffer .= $chunk;
+
+    while (! is_null($frame = Frame::take($buffer))) {
+        fwrite(STDOUT, Frame::encode(GigEnvelope::run($frame['gig'] ?? null)));
+    }
+}
