@@ -3,42 +3,32 @@
 namespace Voyager\IOPools\MailHandlers;
 
 use Voyager\Contracts\IOPools\Loop;
-use Voyager\Contracts\Sketches\Sketch;
 use Voyager\Contracts\IOPools\MailHandler;
-use Voyager\Contracts\IOPools\IOPoolsException;
-use Voyager\Contracts\Sketches\SketchLoopResult;
 
 /**
- * Passes all of a turn's mail to the attached sketch's loop(). A sketch that answers
- * STOP stops the loop.
+ * Holds the loop's mail for the sketch runner. Each delivery is kept, oldest first, until the
+ * runner takes it at the sketch's next frame; the runner calls the sketch's loop() every frame,
+ * with what was taken or with nothing.
  */
 class SketchMailHandler implements MailHandler
 {
-    protected ?Sketch $sketch = null;
-
-    public function attach(Sketch $sketch): void
-    {
-        $this->sketch = $sketch;
-    }
-
-    public function detach(): void
-    {
-        $this->sketch = null;
-    }
-
-    public function sketch(): ?Sketch
-    {
-        return $this->sketch;
-    }
+    /** @var list<object> delivered since the last take() */
+    protected array $held = [];
 
     public function handOff(array $mail, Loop $loop): void
     {
-        if (! $this->sketch) {
-            throw new IOPoolsException('The sketch mail handler has mail to deliver but no sketch attached.');
-        }
+        array_push($this->held, ...$mail);
+    }
 
-        if ($this->sketch->loop($mail) === SketchLoopResult::STOP) {
-            $loop->stop();
-        }
+    /**
+     * Everything delivered since the last take(), oldest first, and nothing held after.
+     *
+     * @return list<object>
+     */
+    public function take(): array
+    {
+        [$mail, $this->held] = [$this->held, []];
+
+        return $mail;
     }
 }
