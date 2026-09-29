@@ -7,8 +7,8 @@ use Voyager\IOPools\WorkerPools\IOPool;
 use Voyager\Contracts\IOPools\IOPoolsException;
 use Voyager\Contracts\IOPools\WorkerPools\PoolWorker;
 
-/** Runs gigs in ext-parallel threads. ZTS builds only; it runs beside a ProcessPool, not instead of one. */
-class ThreadPool extends IOPool
+/** Runs gigs in ext-parallel threads. ZTS builds only; it runs beside a ProcessWorkerPool, not instead of one. */
+class ThreadWorkerPool extends IOPool
 {
     /**
      * @param string $base_path the app every thread boots, so gigs can reach its services

@@ -9,8 +9,8 @@ use ReflectionException;
 use Composer\Autoload\ClassLoader;
 use Voyager\NutsAndBolts\Manager;
 use Voyager\Contracts\IOPools\IOPoolsException;
-use Voyager\IOPools\WorkerPools\Thread\ThreadPool;
-use Voyager\IOPools\WorkerPools\Process\ProcessPool;
+use Voyager\IOPools\WorkerPools\Thread\ThreadWorkerPool;
+use Voyager\IOPools\WorkerPools\Process\ProcessWorkerPool;
 
 /**
  * Builds pools by name. There is no default: an NTS build runs only the process pool, a ZTS
@@ -19,16 +19,16 @@ use Voyager\IOPools\WorkerPools\Process\ProcessPool;
 class WorkerPoolManager extends Manager
 {
     /**
-     * @return ProcessPool
+     * @return ProcessWorkerPool
      * @throws ReflectionException
      * @throws ContainerExceptionInterface
      * @throws NotFoundExceptionInterface
      */
-    public function createProcessDriver(): ProcessPool
+    public function createProcessDriver(): ProcessWorkerPool
     {
         $this->ensureEnabled('process');
 
-        return new ProcessPool(
+        return new ProcessWorkerPool(
             $this->vessel->get('event-loop'),
             (int) config('io-pools.pool_workers.process.max_workers', 4),
             $this->vessel->get('path.base'),
@@ -37,16 +37,16 @@ class WorkerPoolManager extends Manager
     }
 
     /**
-     * @return ThreadPool
+     * @return ThreadWorkerPool
      * @throws ContainerExceptionInterface
      * @throws NotFoundExceptionInterface
      * @throws ReflectionException
      */
-    public function createThreadDriver(): ThreadPool
+    public function createThreadDriver(): ThreadWorkerPool
     {
         $this->ensureEnabled('threads');
 
-        return new ThreadPool(
+        return new ThreadWorkerPool(
             $this->vessel->get('event-loop'),
             (int) config('io-pools.pool_workers.threads.max_workers', 4),
             $this->vessel->get('path.base'),

@@ -9,7 +9,7 @@ use Voyager\Contracts\IOPools\WorkerPools\PoolWorker;
 /**
  * Runs gigs in PHP child processes. Works on every build, NTS and ZTS.
  */
-class ProcessPool extends IOPool
+class ProcessWorkerPool extends IOPool
 {
     /**
      * @param string $base_path the app every worker boots, so gigs can reach its services

@@ -58,7 +58,7 @@ class IOPoolsServiceProvider extends ServiceProvider
 
         // Each enabled pool under its own name: callers ask for the pool they want.
         if (config('io-pools.pool_workers.process.enabled', false)) {
-            $this->app->registerSingleton('process-pool', fn (FrameworkCore $app) => $app->get('worker-pool-mgr')->driver('process'));
+            $this->app->registerSingleton('process-workers', fn (FrameworkCore $app) => $app->get('worker-pool-mgr')->driver('process'));
         }
 
         if (config('io-pools.pool_workers.threads.enabled', false)) {
@@ -66,7 +66,7 @@ class IOPoolsServiceProvider extends ServiceProvider
                 throw new IOPoolsException('io-pools.pool_workers.threads is enabled, but this PHP is not a ZTS build with ext-parallel loaded.');
             }
 
-            $this->app->registerSingleton('thread-pool', fn (FrameworkCore $app) => $app->get('worker-pool-mgr')->driver('thread'));
+            $this->app->registerSingleton('thread-workers', fn (FrameworkCore $app) => $app->get('worker-pool-mgr')->driver('thread'));
         }
     }
 }
