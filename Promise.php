@@ -5,66 +5,77 @@ namespace Voyager\IOPools;
 use Throwable;
 use Voyager\Contracts\IOPools\Loop;
 use Voyager\Contracts\IOPools\PromiseEngine;
-use Voyager\Contracts\IOPools\EventLoopException;
+use Voyager\Contracts\IOPools\IOPoolsException;
 use Voyager\Contracts\IOPools\Promise as PromiseContract;
 
-/**
- * The one promise the framework hands out, whichever library is underneath.
- * The engine knows the library; everything that is true of THIS promise lives here.
- */
 class Promise implements PromiseContract
 {
     protected bool $settled = false;
+
+    protected bool $fulfilled = false;
+
     protected mixed $value = null;
+
     protected ?Throwable $reason = null;
 
     public function __construct(
-        protected readonly PromiseEngine $engine,
-        protected readonly object $inner,
-        protected readonly Loop $loop,
+        public readonly PromiseEngine $engine,
+        public readonly object $inner,
+        public readonly Loop $loop,
     ) {
-        $this->engine->chain($this->inner, $this->recordValue(...), $this->recordReason(...));
+        // The observer handles rejection, so no library reports it as unhandled.
+        $this->engine->chain(
+            $this->inner,
+            function (mixed $value): mixed {
+                [$this->settled, $this->fulfilled, $this->value] = [true, true, $value];
+                return $value;
+            },
+            function (mixed $reason): void {
+                [$this->settled, $this->reason] = [true, self::throwable($reason)];
+            },
+        );
     }
 
-    /**
-     * A foreign library that assimilates this promise calls then($resolve, $reject).
-     * Take both, or its reject handler is dropped and the chain never settles.
-     */
     public function then(callable $callable, ?callable $on_rejected = null): PromiseContract
     {
-        return $this->chain($callable, $on_rejected);
+        return $this->follow($this->engine->chain($this->inner, $callable, $on_rejected));
     }
 
     public function error(callable $callable): PromiseContract
     {
-        return $this->chain(null, $callable);
+        return $this->follow($this->engine->chain(
+            $this->inner,
+            null,
+            fn (mixed $reason): mixed => $callable(self::throwable($reason)),
+        ));
     }
 
-    /**
-     * Runs either way, and passes the outcome through untouched.
-     */
     public function finally(callable $callable): PromiseContract
     {
-        return $this->chain(
-            function (mixed $value) use ($callable) { $callable(); return $value; },
-            function (Throwable $reason) use ($callable) { $callable(); throw $reason; },
-        );
+        return $this->follow($this->engine->chain(
+            $this->inner,
+            function (mixed $value) use ($callable): mixed {
+                $callable();
+                return $value;
+            },
+            function (mixed $reason) use ($callable): never {
+                $callable();
+                throw self::throwable($reason);
+            },
+        ));
     }
 
-    /**
-     * Borrow the loop until this settles. Hands back the value, or throws the reason.
-     * @throws Throwable
-     */
     public function wait(): mixed
     {
-        $this->engine->flush();     // already settled, but its callbacks may still be queued
+        $this->loop->until(fn (): bool => $this->settled);
 
-        $this->loop->until(fn () => $this->settled);
+        if (! $this->fulfilled) {
+            throw $this->reason;
+        }
 
-        return is_null($this->reason) ? $this->value : throw $this->reason;
+        return $this->value;
     }
 
-    /** The writing end: whoever does the work calls one of these, once. */
     public function resolve(mixed $value): void
     {
         $this->engine->resolve($this->inner, $value);
@@ -82,34 +93,24 @@ class Promise implements PromiseContract
 
     public function fulfilled(): bool
     {
-        return $this->settled && is_null($this->reason);
+        return $this->settled && $this->fulfilled;
     }
 
     public function rejected(): bool
     {
-        return $this->settled && ! is_null($this->reason);
+        return $this->settled && ! $this->fulfilled;
     }
 
-    protected function chain(?callable $on_fulfilled, ?callable $on_rejected): PromiseContract
+    private function follow(object $inner): PromiseContract
     {
-        return new static(
-            $this->engine,
-            $this->engine->chain($this->inner, $on_fulfilled, $on_rejected),
-            $this->loop,
-        );
+        return new self($this->engine, $inner, $this->loop);
     }
 
-    protected function recordValue(mixed $value): void
+    /** Libraries may reject with anything. The contract promises a Throwable. */
+    private static function throwable(mixed $reason): Throwable
     {
-        $this->settled = true;
-        $this->value = $value;
-    }
-
-    protected function recordReason(mixed $reason): void
-    {
-        $this->settled = true;
-        $this->reason = $reason instanceof Throwable
+        return $reason instanceof Throwable
             ? $reason
-            : new EventLoopException('Promise rejected: '.(is_scalar($reason) ? $reason : get_debug_type($reason)));
+            : new IOPoolsException('The promise was rejected with '.get_debug_type($reason).'.');
     }
 }

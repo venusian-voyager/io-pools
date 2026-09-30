@@ -2,91 +2,173 @@
 
 namespace Voyager\IOPools;
 
-use Closure;
 use Fiber;
-use FiberError;
+use Closure;
 use Throwable;
-use Voyager\Contracts\IOPools\Event;
-use Voyager\Contracts\IOPools\EventLoopException;
-use Voyager\Contracts\IOPools\Receivable;
+use FiberError;
+use Voyager\Contracts\IOPools\Loop;
+use Voyager\IOPools\Deferrals\Task;
+use Voyager\Contracts\IOPools\Waiter;
+use Voyager\Contracts\IOPools\MailHandler;
+use Voyager\IOPools\Deferrals\Deferrals;
+use Voyager\IOPools\Timers\ActionTimer;
+use Voyager\Contracts\IOPools\WakeReason;
+use Voyager\Contracts\IOPools\LoopResource;
 use Voyager\Contracts\IOPools\PromiseEngine;
-use Voyager\IOPools\PromiseEngines\GuzzlePromiseEngine;
-use Voyager\Contracts\IOPools\Tickable;
-use Voyager\Contracts\IOPools\Resumable;
-use Voyager\Contracts\IOPools\LoopTimer;
-use Voyager\IOPools\Concerns\PoolWaiter;
-use Voyager\Contracts\IOPools\Sourceable;
-use Voyager\Contracts\IOPools\StreamWatchable;
-use Voyager\IOPools\Concerns\NotebookRegistrar;
-use Voyager\Contracts\IOPools\Loop as LoopContract;
-use Voyager\Contracts\IOPools\Promise as PromiseContract;
-use Voyager\Contracts\IOPools\Task as TaskContract;
+use Voyager\IOPools\Deferrals\FiberScheduler;
+use Voyager\Contracts\IOPools\IOPoolsException;
+use Voyager\Contracts\IOPools\LoopResources\Timer;
+use Voyager\Contracts\IOPools\Promise as PromiseInterface;
 
-class EventLoop implements LoopContract
+class EventLoop implements Loop
 {
-    use PoolWaiter, NotebookRegistrar;
+    protected int $status = 0;
 
-    private int $status = 0;
-    private array $on_stop = [];
-    private bool $running = false;
-    private bool $stopping = false;
-    private bool $signals_installed = false;
-    private FiberScheduler $scheduler;
-    private Deferrals $deferrals;
+    protected bool $running = false;
+
+    protected bool $stopping = false;
+
+    protected array $on_stop = [];
+
+    protected FiberScheduler $fibers;
+
+    protected Deferrals $deferrals;
+
+    protected StopSignals $stop_signals;
 
     public function __construct(
-        protected ?ResourceNotebook $notebook = null,
-        protected ?int $tick_budget_ms = 0,
-        protected ?Receivable $mail_handler = null,
-        protected ?PromiseEngine $promise_engine = null,
+        public readonly ResourceRegistry $registry,
+        public readonly Waiter $waiter,
+        public readonly PromiseEngine $promises,
+        public readonly ?MailHandler $mail_handler = null,
     ) {
-        $this->notebook ??= new ResourceNotebook();
-        $this->promise_engine ??= new GuzzlePromiseEngine();
-
-        // always registered: it is never counted as work, so it can't keep a run alive
-        $this->scheduler = new FiberScheduler;
-        $this->notebook->setResumableResource('fibers', $this->scheduler);
+        $this->fibers = new FiberScheduler();
         $this->deferrals = new Deferrals($this);
+        $this->stop_signals = new StopSignals($this);
+
+        $this->registry->add(Deferrals::NAME, $this->deferrals);
+        $this->registry->add(FiberScheduler::NAME, $this->fibers);
+        $this->registry->add(StopSignals::NAME, $this->stop_signals);
+    }
+
+    public function at(float $delay_s, callable $fire): Timer
+    {
+        $timer = new ActionTimer((int) round($delay_s * 1e9), $fire(...));
+        $this->registry->add('timer.'.spl_object_id($timer), $timer);
+
+        return $timer;
+    }
+
+    public function every(float $interval_s, callable $fire, string $name): Timer
+    {
+        $interval_ns = (int) round($interval_s * 1e9);
+
+        /**
+         * @var Timer
+         */
+        return $this->registry->add($name, new ActionTimer($interval_ns, $fire(...), $interval_ns));
+    }
+
+    public function promise(): Promise
+    {
+        return new Promise($this->promises, $this->promises->make(), $this);
     }
 
     /**
-     * @return int
+     * @throws Throwable
+     */
+    public function await(mixed $value): mixed
+    {
+        return match (true) {
+            $value instanceof PromiseInterface => $value->wait(),
+            is_object($value) && method_exists($value, 'then') =>
+            new Promise($this->promises, $this->promises->adopt($value), $this)->wait(),
+            default => $value,
+        };
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function async(callable $body): Task
+    {
+        $promise = $this->promise();
+
+        return new Task($promise, $this->fibers->start($body(...), $promise), $this->fibers);
+    }
+
+    public function defer(Closure $work): PromiseInterface
+    {
+        return $this->deferrals->add($work);
+    }
+
+    public function post(object $mail): void
+    {
+        $this->registry->post($mail);
+    }
+
+    public function resource(string $name, LoopResource $resource): LoopResource
+    {
+        return $this->registry->add($name, $resource);
+    }
+
+    public function forget(string $name): void
+    {
+        $this->registry->forget($name);
+    }
+
+    public function crown(string $name): void
+    {
+        $this->registry->crown($name);
+    }
+
+    public function supports(WakeReason $kind): bool
+    {
+        return $this->waiter->supports($kind);
+    }
+
+    public function onStop(callable $hook): void
+    {
+        $this->on_stop[] = $hook(...);
+    }
+
+    /**
      * @throws Throwable
      */
     public function run(): int
     {
-        $this->status = 0;
-        $this->stopping = false;
-        $this->running = true;
-
-        $this->listenForDeath();
+        [$this->status, $this->stopping, $this->running] = [0, false, true];
+        $this->stop_signals->arm();
 
         try {
-            $this->loop();
-        }
-        finally {
+            while (! $this->stopping && $this->registry->hasWork()) {
+                $this->turn();
+            }
+        } finally {
             $this->running = false;
-
-            // fibers first: their tasks reject before any other stop hook (a pool's, say) runs
-            $this->scheduler->cancelAll();
-            $this->promise_engine->flush();
+            $this->fibers->cancelAll();
+            $this->promises->flush();
 
             foreach ($this->on_stop as $hook) {
                 try { $hook(); } catch (Throwable) {}
             }
 
-            // the stop ended this run, not the loop: later until() calls and the next run() start clean
+            // What the hooks settled (a pool rejecting its gigs, say) lands now, not on some later turn.
+            $this->promises->flush();
+
             $this->stopping = false;
         }
 
         return $this->status;
     }
 
+    public function stop(int $status = 0): void
+    {
+        $this->stopping = true;
+        $this->status = $status;
+    }
+
     /**
-     * Wait until $assertion holds. Same call site, context decides:
-     *  - inside a fiber async() started: suspend, and the resume phase brings us back once it holds
-     *  - anywhere else (main stack, a foreign fiber, a fiber sitting on a C frame): borrow the loop
-     *    and turn quietly. Mail stays in the bag.
      * @throws Throwable
      */
     public function until(Closure $assertion): void
@@ -97,246 +179,76 @@ class EventLoop implements LoopContract
 
         $fiber = Fiber::getCurrent();
 
-        if (! is_null($fiber) && $this->scheduler->owns($fiber))
-        {
+        if (! is_null($fiber) && $this->fibers->owns($fiber)) {
             try {
                 Fiber::suspend($assertion);
                 return;
             } catch (FiberError) {
-                // a C frame (a native callback) is between us and the fiber: fall through and borrow
+                // a C frame sits between us and the fiber: borrow the loop instead
             }
         }
 
-        $this->listenForDeath();
+        // Inside a run the run's own watch stands; a wait on its own listens again.
+        if (! $this->running) {
+            $this->stop_signals->arm();
+        }
 
         while (! $assertion())
         {
             if ($this->stopping) {
-                // outside run() nothing else clears the flag: the stop ends this wait, not the loop
                 if (! $this->running) {
                     $this->stopping = false;
                 }
 
-                throw new EventLoopException('The loop was stopped while until() was still waiting.');
+                throw new IOPoolsException('The loop was stopped while until() was still waiting.');
             }
 
-            // Asked fresh every turn: the last timer may have fired, the last resource may have left.
-            if (is_null($this->nextDue()) && ! $this->notebook->hasResources())
+            if (! $this->registry->hasWork())
             {
-                // a settled foreign promise still has its callbacks queued: that is work, flush it first
-                $this->promise_engine->flush();
+                $this->promises->flush();
+
                 if ($assertion()) {
                     return;
                 }
 
-                // only suspended fibers are left: wake the ones whose condition holds, then look again
-                if ($this->scheduler->resume()) {
-                    $this->promise_engine->flush();
+                // Only parked fibers are left and nothing can wake them: cancel, then look again.
+                if (! $this->fibers->idle()) {
+                    $this->fibers->cancelAll();
+                    $this->promises->flush();
                     continue;
                 }
 
-                // nothing can wake the rest: cancel them, then look again, so a wait on one of their
-                // tasks sees CancelledException rather than this
-                if (! $this->scheduler->idle())
-                {
-                    $this->scheduler->cancelAll();
-                    $this->promise_engine->flush();
-                    continue;
-                }
-
-                throw new EventLoopException('until() ran out of work before its condition was met.');
+                throw new IOPoolsException('until() ran out of work before its condition was met.');
             }
 
             $this->turn(quiet: true);
         }
     }
 
-    public function running(): bool
-    {
-        return $this->running;
-    }
-
-    public function stop(int $status = 0): void
-    {
-        $this->stopping = true;
-        $this->status = $status;
-    }
-
     /**
-     * Lets the ResourceNotebook tick resource as
-     * soon as something is ready
-     * @param bool $quiet
-     * @return void
      * @throws Throwable
      */
     protected function turn(bool $quiet = false): void
     {
-        $now = microtime(true);
+        $fired = $this->waiter->wait($this->registry->soonestDue());
 
-        $next = $this->nextDue();
+        $this->deferrals->release();
+        $this->registry->wake($fired);
+        $this->registry->fireDue(hrtime(true));
+        $this->registry->tick();
 
-        // A null $next is still a turn: no alarm is set, so the wait decides what to sleep on.
-        $fired = $this->wait(for: $next, until: $now);
-
-        // Tick everything that's due. For a timer, "tick" = call its function.
-        $this->notebook->read($fired);
-        $this->notebook->fire($now);
-        $this->notebook->tick();
-        // settled this turn → callbacks this turn → fibers waiting on them resume this turn, until quiet
         do {
-            $this->promise_engine->flush();
-        } while ($this->notebook->resume());
+            $this->promises->flush();
+        } while ($this->registry->resume());
 
-        $this->notebook->pump();
+        $this->registry->pump();
 
-        if(!$quiet)
-        {
-            $this->react();
-        }
-        $this->throwFailsIfAny();
-    }
-
-    public function at(float $delay_s, callable $fire): LoopTimer
-    {
-        return $this->oneShotTimer($delay_s, $fire);
-    }
-
-    public function every(float $interval_s, callable $fire, string $name): LoopTimer
-    {
-        return $this->intervalTimer($interval_s, $fire, $name);
-    }
-
-    /**
-     * A new pending promise. Hand it out, keep a reference, and resolve() or reject() it from a tick.
-     */
-    public function promise(): Promise
-    {
-        return new Promise($this->promise_engine, $this->promise_engine->make(), $this);
-    }
-
-    /**
-     * Wait on anything: our promise, anyone else's thenable, or a plain value (handed straight back).
-     * @throws Throwable
-     */
-    public function await(mixed $value): mixed
-    {
-        return match (true) {
-            $value instanceof PromiseContract => $value->wait(),
-            is_object($value) && method_exists($value, 'then') => $this->adopt($value)->wait(),
-            default => $value,
-        };
-    }
-
-    public function adopt(object $thenable): PromiseContract
-    {
-        return new Promise($this->promise_engine, $thenable, $this);
-    }
-
-    public function async(callable $body): TaskContract
-    {
-        $promise = $this->promise();
-
-        return new Task($promise, $this->scheduler->start($body(...), $promise), $this->scheduler);
-    }
-
-    public function defer(Closure $work): PromiseContract
-    {
-        return $this->deferrals->add($work);
-    }
-
-    public function post(Event $event): void
-    {
-        $this->notebook->queue($event);
-    }
-
-    public function forget(string $name): void
-    {
-        $this->notebook->forget($name);
-    }
-
-    public function resource(string $name, Sourceable $resource): Sourceable
-    {
-        return match (true) {
-            $resource instanceof StreamWatchable => $this->streamingResource($name, $resource),
-            $resource instanceof Tickable => $this->tickableResource($name, $resource),
-            $resource instanceof Resumable => $this->resumableResource($name, $resource),
-        };
-    }
-
-    /**
-     * Runs when run() ends, however it ends. For services that live as long as the loop:
-     * hooks are never removed.
-     *
-     * @param callable $hook
-     * @return void
-     */
-    public function onStop(callable $hook): void
-    {
-        $this->on_stop[] = $hook(...);
-    }
-
-    /**
-     * @throws Throwable
-     */
-    private function loop(): void
-    {
-        $next = $this->nextDue();
-
-        // Nothing due and nobody registered: nothing could ever produce work, so the run is over.
-        while (! $this->stopping && (!is_null($next) || $this->notebook->hasResources()))
-        {
-            $this->turn();
-
-            // Look at the notebook. When is the soonest note due?
-            $next = $this->nextDue();
+        if (! $quiet && $this->mail_handler && ($mail = $this->registry->mail())) {
+            $this->mail_handler->handOff($mail, $this);
         }
 
-        $this->running = false;
-    }
-
-    private function react() : void
-    {
-        if($mail = $this->notebook->mail())
-        {
-            $this->mail_handler?->handOff($mail);
+        if ($e = $this->registry->failure()) {
+            throw $e;
         }
-
-    }
-
-    private function nextDue(): ?float
-    {
-        return $this->notebook->soonestDueDate();
-    }
-
-    private function listenForDeath(): void
-    {
-        if ($this->signals_installed || ! extension_loaded('pcntl')) {
-            return;
-        }
-
-        $this->signals_installed = true;
-        pcntl_async_signals(true);
-
-        foreach ([SIGINT => 130, SIGTERM => 143] as $signal => $status)
-        {
-            pcntl_signal($signal, function () use ($signal, $status) {
-                // Asked once already and we still haven't got there: they mean it.
-                // Die exactly as if we had never listened.
-                if ($this->stopping) {
-                    pcntl_signal($signal, SIG_DFL);
-                    posix_kill(posix_getpid(), $signal);
-                }
-
-                $this->stop($status);
-            });
-        }
-    }
-
-    /**
-     * @throws Throwable
-     */
-    private function throwFailsIfAny(): void
-    {
-        if ($e = $this->notebook->failure()) throw $e;
     }
 }

@@ -3,39 +3,53 @@
 
 // usage: pool-worker <autoload.php> <base_path>
 
-use Voyager\Contracts\Console\Kernel;
 use Voyager\Core\VenusianVoyager;
-use Voyager\IOPools\PoolEnvelope;
-use Voyager\IOPools\ProcessPoolFrame;
+use Voyager\Contracts\Console\Kernel;
+use Voyager\IOPools\WorkerPools\GigEnvelope;
+use Voyager\IOPools\WorkerPools\Process\Frame;
 
-// stdout belongs to the protocol. Anything else, echoes and displayed errors alike, goes to stderr.
-// First statement, so the autoloader's own warnings are caught too.
-$closure = function (string $chunk) {
-    fwrite(STDERR, $chunk); return '';
-};
-ob_start($closure, 1);
+// stdout carries frames only. Anything a bootstrapper or a gig prints goes to stderr, which
+// the pool keeps the tail of for its error messages. First statement, so the autoloader's
+// own warnings are caught too.
+ob_start(function (string $chunk): string {
+    fwrite(STDERR, $chunk);
+
+    return '';
+}, 1);
 
 require $argv[1];
 
-// launch() only builds the container. A gig reaching for app('hash') needs what the console boots.
-// Bootstrap failures must not hit stdout: HandleExceptions renders to ConsoleOutput (the protocol pipe),
-// and the parent then reports DeadWorkerException with an empty stderr tail.
+// A gig that reaches for an app service needs the app the console boots.
+// An app ships bootstrap/app.php; a bare package is booted from its base path.
 try {
-    VenusianVoyager::launch($argv[2])->make(Kernel::class)->bootstrap();
+    $base_path = $argv[2];
+
+    $app = is_file($base_path.'/bootstrap/app.php')
+        ? require $base_path.'/bootstrap/app.php'
+        : VenusianVoyager::setup($base_path)->create();
+
+    $app->make(Kernel::class)->bootstrap();
 } catch (Throwable $e) {
-    fwrite(STDERR, $e->getMessage().PHP_EOL);
+    fwrite(STDERR, $e::class.': '.$e->getMessage().PHP_EOL);
     exit(1);
 }
 
-// booted: the parent holds our first gig until it reads this
-ProcessPoolFrame::write(STDOUT, ['hello' => getmypid()]);
+// Booted: the pool holds the first gig until it reads this.
+fwrite(STDOUT, Frame::encode(['hello' => getmypid()]));
 
 $buffer = '';
 
+// Blocking reads: a worker has nothing else to do. The pool closing stdin ends the loop.
 while (! feof(STDIN)) {
-    $buffer .= fread(STDIN, 65536);                 // blocking read: a worker has nothing else to do
+    $chunk = fread(STDIN, 65536);
 
-    while ($frame = ProcessPoolFrame::take($buffer)) {
-        ProcessPoolFrame::write(STDOUT, PoolEnvelope::run($frame['job']));
+    if ($chunk === false) {
+        break;
+    }
+
+    $buffer .= $chunk;
+
+    while (! is_null($frame = Frame::take($buffer))) {
+        fwrite(STDOUT, Frame::encode(GigEnvelope::run($frame['gig'] ?? null)));
     }
 }

@@ -4,39 +4,50 @@ namespace Voyager\IOPools\PromiseEngines;
 
 use Throwable;
 use React\Promise\Deferred;
-use Voyager\Contracts\IOPools\EventLoopException;
+use React\Promise\PromiseInterface;
+use Voyager\Contracts\IOPools\IOPoolsException;
+use function React\Promise\resolve;
 
 class ReactPromiseEngine extends PromiseEngine
 {
-    /**
-     * React splits the two ends: the Deferred is written to, its promise() is read from.
-     */
     public function make(): object
     {
         return new Deferred();
     }
 
+    public function adopt(object $thenable): object
+    {
+        return resolve($thenable);
+    }
+
     public function resolve(object $inner, mixed $value): void
     {
-        $this->writable($inner)->resolve($value);
+        $this->deferred($inner)->resolve($value);
     }
 
     public function reject(object $inner, Throwable $reason): void
     {
-        $this->writable($inner)->reject($reason);
+        $this->deferred($inner)->reject($reason);
     }
 
     public function chain(object $inner, ?callable $on_fulfilled, ?callable $on_rejected): object
     {
-        $readable = $inner instanceof Deferred ? $inner->promise() : $inner;
+        $promise = $inner instanceof Deferred ? $inner->promise() : $inner;
 
-        return parent::chain($readable, $on_fulfilled, $on_rejected);
+        return $promise->then($on_fulfilled, $on_rejected);
     }
 
-    private function writable(object $inner): Deferred
+    public function flush(): void
     {
-        return $inner instanceof Deferred
-            ? $inner
-            : throw new EventLoopException('Only the promise the loop made can be settled; a chained one settles itself.');
+        // react/promise 3 settles synchronously: no queue to run.
+    }
+
+    private function deferred(object $inner): Deferred
+    {
+        if (! $inner instanceof Deferred) {
+            throw new IOPoolsException('Only a promise made by Loop::promise() can be resolved or rejected.');
+        }
+
+        return $inner;
     }
 }
