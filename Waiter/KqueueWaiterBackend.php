@@ -57,6 +57,12 @@ class KqueueWaiterBackend extends WaiterBackendDriver
         $this->kq = $kq;
     }
 
+    /** A kqueue descriptor is itself readable while it has pending events (kqueue(2)). */
+    public function descriptor(): ?int
+    {
+        return $this->kq;
+    }
+
     public function supports(WakeReason $kind): bool
     {
         return match ($kind) {

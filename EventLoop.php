@@ -127,6 +127,11 @@ class EventLoop implements Loop
         return $this->waiter->supports($kind);
     }
 
+    public function descriptor(): ?int
+    {
+        return $this->waiter->descriptor();
+    }
+
     public function onStop(callable $hook): void
     {
         $this->on_stop[] = $hook(...);

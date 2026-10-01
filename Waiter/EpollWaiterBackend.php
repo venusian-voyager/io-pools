@@ -41,6 +41,12 @@ class EpollWaiterBackend extends WaiterBackendDriver
         $this->ep = $ep;
     }
 
+    /** An epoll descriptor is itself readable while it has ready events (epoll(7)). */
+    public function descriptor(): ?int
+    {
+        return $this->ep;
+    }
+
     public function supports(WakeReason $kind): bool
     {
         return $kind === WakeReason::READABLE || $kind === WakeReason::WRITEABLE;

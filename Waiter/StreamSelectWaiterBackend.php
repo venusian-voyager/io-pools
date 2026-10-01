@@ -20,6 +20,12 @@ class StreamSelectWaiterBackend extends WaiterBackendDriver
      */
     private array $writes = [];
 
+    /** stream_select keeps its set in PHP arrays: there is no descriptor standing for it. */
+    public function descriptor(): ?int
+    {
+        return null;
+    }
+
     public function supports(WakeReason $kind): bool
     {
         return $kind === WakeReason::READABLE || $kind === WakeReason::WRITEABLE;
