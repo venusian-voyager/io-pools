@@ -29,6 +29,11 @@ class LoopWaiter implements Waiter
             || ($kind === WakeReason::CONTROL_SIGNAL && extension_loaded('pcntl'));
     }
 
+    public function descriptor(): ?int
+    {
+        return $this->backend->descriptor();
+    }
+
     public function wait(?int $deadline = null): array
     {
         $this->sync();
