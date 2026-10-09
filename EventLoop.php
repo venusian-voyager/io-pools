@@ -4,6 +4,7 @@ namespace Voyager\IOPools;
 
 use Fiber;
 use Closure;
+use ReflectionException;
 use Throwable;
 use FiberError;
 use Voyager\Contracts\IOPools\Loop;

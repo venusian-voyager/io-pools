@@ -35,16 +35,21 @@ class WaiterBackendManager extends Manager
 
     protected function createAutoDriver(): WaiterBackendDriver
     {
-        if(extension_loaded('epoll'))
-        {
-            return $this->createEpollDriver();
-        }
-        elseif(extension_loaded('kqueue'))
-        {
-            return $this->createKqueueDriver();
-        }
+        return match ($this->autoDriver()) {
+            'epoll' => $this->createEpollDriver(),
+            'kqueue' => $this->createKqueueDriver(),
+            default => $this->createSelectDriver(),
+        };
+    }
 
-        return $this->createSelectDriver();
+    /** The backend `auto` picks: epoll, then kqueue, then select. */
+    public function autoDriver(): string
+    {
+        return match (true) {
+            extension_loaded('epoll') => 'epoll',
+            extension_loaded('kqueue') => 'kqueue',
+            default => 'select',
+        };
     }
 
     /**
