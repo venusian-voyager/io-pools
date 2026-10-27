@@ -2,6 +2,7 @@
 
 namespace Voyager\IOPools;
 
+use Voyager\IOPools\WorkerPools\Thread\ThreadSupport;
 use ReflectionException;
 use Voyager\Contracts\Core\FrameworkCore;
 use Voyager\Contracts\IOPools\IOPoolsException;
@@ -48,12 +49,17 @@ class IOPoolsServiceProvider extends ServiceProvider
             /** @var MailHandlerManager $mail_mgr */
             $mail_mgr = $app->get('mail-handler-mgr');
 
-            return new EventLoop(
+            $loop = new EventLoop(
                 $registry,
                 $waiter,
                 $promise_mgr->driver(),
                 $mail_mgr->driver(),
             );
+
+            // a task resolves the scoped instances of the fiber that started it
+            $loop->onFiberStart($app->shareScopeWith(...));
+
+            return $loop;
         });
 
         // Each enabled pool under its own name: callers ask for the pool they want.
@@ -66,7 +72,17 @@ class IOPoolsServiceProvider extends ServiceProvider
                 throw new IOPoolsException('io-pools.pool_workers.threads is enabled, but this PHP is not a ZTS build with ext-parallel loaded.');
             }
 
-            $this->app->registerSingleton('thread-workers', fn (FrameworkCore $app) => $app->get('worker-pool-mgr')->driver('thread'));
+            // Asked for by name, a thread pool where threads don't run fails with why, never quietly
+            // becoming processes. Work that names no pool asks AutoPool, which falls back instead.
+            $this->app->registerSingleton('thread-workers', function (FrameworkCore $app) {
+                $probe = ThreadSupport::probe();
+
+                if (! $probe->supported) {
+                    throw new IOPoolsException("The thread workers can't run in this PHP: {$probe->reason}.");
+                }
+
+                return $app->get('worker-pool-mgr')->driver('thread');
+            });
         }
     }
 }

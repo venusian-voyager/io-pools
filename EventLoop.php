@@ -138,6 +138,22 @@ class EventLoop implements Loop
         $this->on_stop[] = $hook(...);
     }
 
+    /** Hands each fiber the loop starts to the hook, before the fiber runs. */
+    public function onFiberStart(callable $hook): void
+    {
+        $this->fibers->onStart($hook(...));
+    }
+
+    /**
+     * Run $suspending inside each fiber the loop started just before it suspends on a wait, and
+     * $resumed just after it returns. Raw Fiber::suspend() calls and fibers the loop did not
+     * start never run them.
+     */
+    public function onFiberSuspend(callable $suspending, callable $resumed): void
+    {
+        $this->fibers->onSuspend($suspending(...), $resumed(...));
+    }
+
     /**
      * @throws Throwable
      */
@@ -187,7 +203,7 @@ class EventLoop implements Loop
 
         if (! is_null($fiber) && $this->fibers->owns($fiber)) {
             try {
-                Fiber::suspend($assertion);
+                $this->fibers->suspend($fiber, $assertion);
                 return;
             } catch (FiberError) {
                 // a C frame sits between us and the fiber: borrow the loop instead
@@ -215,6 +231,11 @@ class EventLoop implements Loop
 
                 if ($assertion()) {
                     return;
+                }
+
+                // The flush may have settled what a parked fiber waits on: the next turn resumes it.
+                if ($this->registry->hasWork()) {
+                    continue;
                 }
 
                 // Only parked fibers are left and nothing can wake them: cancel, then look again.
