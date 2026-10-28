@@ -138,6 +138,17 @@ class EventLoop implements Loop
         $this->on_stop[] = $hook(...);
     }
 
+    public function onStopSignal(callable $handler): void
+    {
+        $this->stop_signals->listen($handler(...));
+    }
+
+    public function ignoreStopSignals(): void
+    {
+        $this->stop_signals->ignore();
+        $this->waiter->sync();
+    }
+
     /** Hands each fiber the loop starts to the hook, before the fiber runs. */
     public function onFiberStart(callable $hook): void
     {
@@ -168,6 +179,9 @@ class EventLoop implements Loop
             }
         } finally {
             $this->running = false;
+            // Done listening: the backend lets go of the stop signals now, giving back what handled them before.
+            $this->stop_signals->disarm();
+            $this->waiter->sync();
             $this->fibers->cancelAll();
             $this->promises->flush();
 
@@ -210,45 +224,55 @@ class EventLoop implements Loop
             }
         }
 
-        // Inside a run the run's own watch stands; a wait on its own listens again.
-        if (! $this->running) {
+        // Inside a run the run's own watch stands; a wait on its own listens again, and lets go after.
+        $standalone = ! $this->running;
+
+        if ($standalone) {
             $this->stop_signals->arm();
         }
 
-        while (! $assertion())
-        {
-            if ($this->stopping) {
-                if (! $this->running) {
-                    $this->stopping = false;
-                }
+        try {
 
-                throw new IOPoolsException('The loop was stopped while until() was still waiting.');
-            }
-
-            if (! $this->registry->hasWork())
+            while (! $assertion())
             {
-                $this->promises->flush();
+                if ($this->stopping) {
+                    if (! $this->running) {
+                        $this->stopping = false;
+                    }
 
-                if ($assertion()) {
-                    return;
+                    throw new IOPoolsException('The loop was stopped while until() was still waiting.');
                 }
 
-                // The flush may have settled what a parked fiber waits on: the next turn resumes it.
-                if ($this->registry->hasWork()) {
-                    continue;
-                }
-
-                // Only parked fibers are left and nothing can wake them: cancel, then look again.
-                if (! $this->fibers->idle()) {
-                    $this->fibers->cancelAll();
+                if (! $this->registry->hasWork())
+                {
                     $this->promises->flush();
-                    continue;
+
+                    if ($assertion()) {
+                        return;
+                    }
+
+                    // The flush may have settled what a parked fiber waits on: the next turn resumes it.
+                    if ($this->registry->hasWork()) {
+                        continue;
+                    }
+
+                    // Only parked fibers are left and nothing can wake them: cancel, then look again.
+                    if (! $this->fibers->idle()) {
+                        $this->fibers->cancelAll();
+                        $this->promises->flush();
+                        continue;
+                    }
+
+                    throw new IOPoolsException('until() ran out of work before its condition was met.');
                 }
 
-                throw new IOPoolsException('until() ran out of work before its condition was met.');
+                $this->turn(quiet: true);
             }
-
-            $this->turn(quiet: true);
+        } finally {
+            if ($standalone) {
+                $this->stop_signals->disarm();
+                $this->waiter->sync();
+            }
         }
     }
 

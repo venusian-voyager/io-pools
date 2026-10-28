@@ -117,7 +117,11 @@ class KqueueWaiterBackend extends WaiterBackendDriver
             throw new IOPoolsException("kevent() could not add {$wake->key()} for '{$owner}': errno {$errno}.");
         }
 
+        // kqueue reports the signal only while it isn't handled; what handled it before comes back on drop().
+        $previous = null;
+
         if ($wake instanceof ControlSignal) {
+            $previous = pcntl_signal_get_handler($wake->signo);
             pcntl_signal($wake->signo, SIG_IGN);
         }
 
@@ -127,6 +131,7 @@ class KqueueWaiterBackend extends WaiterBackendDriver
             'ident' => $kev->ident,
             'owners' => [$owner => $wake],
             'file' => $file,
+            'previous' => $previous,
         ];
         $this->by_owner[$owner][$wake->key()] = $id;
     }
@@ -249,7 +254,7 @@ class KqueueWaiterBackend extends WaiterBackendDriver
         }
 
         if ($registration['filter'] === EVFILT_SIGNAL) {
-            pcntl_signal($registration['ident'], SIG_DFL);
+            pcntl_signal($registration['ident'], $registration['previous'] ?? SIG_DFL);
         }
 
         if (is_resource($registration['file'])) {

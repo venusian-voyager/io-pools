@@ -21,6 +21,9 @@ class SignalRelay
      */
     private array $watchers = [];
 
+    /** @var array<int, callable|int> what handled each watched signal before the relay, given back when it stops */
+    private array $previous = [];
+
     public function __construct(WaiterBackendDriver $backend)
     {
         $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
@@ -41,6 +44,7 @@ class SignalRelay
     public function watch(string $owner, ControlSignal $wake): void
     {
         if (empty($this->watchers[$wake->signo])) {
+            $this->previous[$wake->signo] = pcntl_signal_get_handler($wake->signo);
             pcntl_signal($wake->signo, fn (int $signo) => @fwrite($this->pair[1], chr($signo)));
         }
 
@@ -53,7 +57,8 @@ class SignalRelay
 
         if (empty($this->watchers[$wake->signo])) {
             unset($this->watchers[$wake->signo]);
-            pcntl_signal($wake->signo, SIG_DFL);
+            pcntl_signal($wake->signo, $this->previous[$wake->signo] ?? SIG_DFL);
+            unset($this->previous[$wake->signo]);
         }
     }
 

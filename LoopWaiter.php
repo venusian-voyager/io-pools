@@ -56,7 +56,11 @@ class LoopWaiter implements Waiter
     }
 
     /** Bring the backend's set in line with what every wake source declares this turn. */
-    private function sync(): void
+    /**
+     * Bring the backend's registrations in line with what the resources want now, without waiting:
+     * a resource that stopped wanting a wake is let go of here, not only on the next wait.
+     */
+    public function sync(): void
     {
         $wanted = [];
 

@@ -23,13 +23,42 @@ class StopSignals extends WakeSource implements Background
 
     private bool $tripped = false;
 
+    /** Listening: a run or a standalone until() is going on. */
+    private bool $armed = false;
+
+    /** The loop leaves stop signals to the process (a loop in a thread, a loop nested in another runner). */
+    private bool $ignored = false;
+
+    /** @var list<\Closure(int): bool> asked first, in order, on a stop signal */
+    private array $handlers = [];
+
     public function __construct(
         protected readonly LoopInterface $loop
     ) {}
 
     /** A new run or wait listens again after an earlier stop tripped the watch. */
+    /** Ask $handler before stopping the loop on a stop signal; one returning true takes it. */
+    public function listen(\Closure $handler): void
+    {
+        $this->handlers[] = $handler;
+    }
+
+    /** Never listen: the process's stop signals are someone else's. */
+    public function ignore(): void
+    {
+        $this->ignored = true;
+    }
+
+    /** Stop listening, until the next arm(). */
+    public function disarm(): void
+    {
+        $this->armed = false;
+    }
+
     public function arm(): void
     {
+        $this->armed = true;
+
         if ($this->tripped) {
             $this->tripped = false;
             $this->epoch++;
@@ -38,7 +67,7 @@ class StopSignals extends WakeSource implements Background
 
     public function wakes(): array
     {
-        if ($this->tripped || ! $this->loop->supports(WakeReason::CONTROL_SIGNAL))
+        if (! $this->armed || $this->ignored || $this->tripped || ! $this->loop->supports(WakeReason::CONTROL_SIGNAL))
         {
             return [];
         }
@@ -59,6 +88,12 @@ class StopSignals extends WakeSource implements Background
             foreach (array_keys(self::STATUS) as $signo)
             {
                 pcntl_signal($signo, SIG_DFL);
+            }
+
+            foreach ($this->handlers as $handler) {
+                if ($handler($wake->signo) === true) {
+                    return;   // taken: the handler stops the loop once it is done
+                }
             }
 
             $this->loop->stop(self::STATUS[$wake->signo]);
